@@ -47,6 +47,20 @@ install -m 0755 scomp-mcp ~/.local/bin/scomp-mcp
 Ensure `~/.local/bin` is on the PATH seen by your MCP host, or use the absolute
 binary path in its configuration.
 
+### RPM package
+
+For Fedora-family systems, build an offline-capable source RPM and then a
+binary RPM with:
+
+```sh
+make srpm
+make rpm
+```
+
+The latter uses `mock`; install `rpkg` and `mock` first, and ensure your user
+is in the `mock` group. The package installs only `scomp-mcp` under
+`/usr/bin`; credentials remain per-user and no system service is created.
+
 ### Authorize this laptop
 
 ```sh

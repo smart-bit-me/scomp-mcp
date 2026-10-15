@@ -1,0 +1,16 @@
+#!/bin/bash
+# Custom rpkg macros for scomp-mcp. Referenced by rpkg.conf.
+
+# Bundle Go dependencies in the source RPM so mock can build offline.
+function go_vendor_pack {
+    set -e
+    local tarball_name="go-vendor.tar.gz"
+    export PATH="/usr/bin:$PATH"
+    export GOMODCACHE=/tmp/
+    export HOME="$(getent passwd "$(id -u)" | cut -d: -f6)"
+    go mod download
+    go mod vendor
+    tar czf "${OUTDIR}/${tarball_name}" vendor/
+    rm -rf vendor/
+    echo "$tarball_name"
+}
