@@ -1,6 +1,6 @@
 module github.com/smart-bit-me/scomp-mcp
 
-go 1.25.0
+go 1.27.1
 
 require (
 	github.com/gorilla/websocket v1.5.3
