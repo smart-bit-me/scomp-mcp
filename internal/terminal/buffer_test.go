@@ -147,3 +147,52 @@ func TestTailBytesValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestReadUntilReturnsBoundedSuffix(t *testing.T) {
+	h := newTestHandle(t, 1, "echo DONE_%s x\nlog line one\nlog line two\nDONE_x\n$ ")
+	result, err := h.readUntil(context.Background(), 0, 1, 10, 0, "DONE_x")
+	if err != nil || !result.Found || result.Output != "two\nDONE_x" || result.Cursor != 47 || result.Skipped != 37 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	next, err := h.read(context.Background(), result.Cursor, 1, 100, 0, 0)
+	if err != nil || next.Output != "\n$ " {
+		t.Fatalf("next=%+v err=%v", next, err)
+	}
+}
+
+func TestReadUntilWaitsForSplitMarker(t *testing.T) {
+	h := newTestHandle(t, 1, "building\nDON")
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		h.append([]byte("E_7f\n"))
+	}()
+	result, err := h.readUntil(context.Background(), 0, 1, 100, time.Second, "DONE_7f")
+	if err != nil || !result.Found || result.Output != "building\nDONE_7f" || result.Skipped != 0 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
+func TestReadUntilTimeoutKeepsCursor(t *testing.T) {
+	h := newTestHandle(t, 1, "0123456789")
+	result, err := h.readUntil(context.Background(), 4, 1, 100, 20*time.Millisecond, "DONE")
+	if err != nil || result.Found || result.Output != "" || result.Cursor != 4 || result.Pending != 6 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
+func TestReadUntilReturnsOnResync(t *testing.T) {
+	h := newTestHandle(t, 2, "DONE")
+	result, err := h.readUntil(context.Background(), 0, 1, 100, time.Second, "DONE")
+	if err != nil || !result.Resynced || result.Found || result.Cursor != 0 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
+func TestReadUntilRejectsInvalidMarkers(t *testing.T) {
+	h := newTestHandle(t, 1, "")
+	for _, marker := range []string{"", "a\nb", "\x1b[0m", strings.Repeat("x", maxMarkerBytes+1), "\xff"} {
+		if _, err := h.readUntil(context.Background(), 0, 1, 100, 0, marker); err == nil {
+			t.Errorf("marker %q accepted", marker)
+		}
+	}
+}

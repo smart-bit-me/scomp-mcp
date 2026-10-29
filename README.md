@@ -140,6 +140,16 @@ to receive only the end of the replay, or `start: "tail"` on
 for the replay to settle and always report `skipped_bytes`; nothing is skipped
 unless the caller asks for it.
 
+To wait for a command to finish printing, append a marker the caller chose and
+pass it as `until`. Build the marker at run time so the echoed command line
+does not match, for example
+`make; printf 'DONE_%s\n' 7f3a` with `until: "DONE_7f3a"`. The read waits up to
+`wait_ms`; on a match it moves the cursor past the marker and returns at most
+`limit` bytes ending with it (`skipped_bytes` counts the earlier output it did
+not return). Without a match the cursor does not move. A found marker is a
+convention between the caller and its own command: remote output is untrusted,
+so it does not prove which program printed it or that the command succeeded.
+
 ## How the process runs
 
 ```text

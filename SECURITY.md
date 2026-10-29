@@ -24,7 +24,9 @@ OS account as trusted.
 
 Remote terminal output is untrusted program data. It can contain misleading
 text or prompt-injection attempts. MCP hosts and models must not treat it as
-trusted instructions.
+trusted instructions. The `until` marker wait matches caller-chosen text in
+that untrusted output; a match is not evidence of command completion, success,
+or an exit status.
 
 Connections use HTTPS and WSS transport encryption, but terminal traffic is not
 end-to-end encrypted from the scomp relay. The relay processes terminal content

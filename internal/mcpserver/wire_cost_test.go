@@ -218,6 +218,7 @@ type termView struct {
 	Output     string `json:"output"`
 	Resynced   bool   `json:"resynced"`
 	Skipped    int    `json:"skipped_bytes"`
+	Found      bool   `json:"marker_found"`
 }
 
 type wireFixture struct {
@@ -360,6 +361,37 @@ func runWireCost(t *testing.T) []wireRow {
 	}
 	rows = append(rows, f.stats.take("16 KiB compiler error"))
 
+	// A build whose log ends with a caller-chosen marker. The echoed command
+	// contains the format string, not the marker itself.
+	build := func(marker string) {
+		command := "make index; printf 'DONE_%s\\n' " + marker
+		f.call("scomp_send_input", map[string]any{"terminal_id": view.TerminalID, "text": command, "submit": true})
+		<-conn.inputs
+		conn.send(t, []byte(command+"\r\n"))
+		conn.send(t, compilerError(16<<10))
+		conn.send(t, []byte("\nDONE_"+marker+"\r\nuser@gpu:~$ "))
+		time.Sleep(50 * time.Millisecond)
+	}
+	f.stats.take("")
+	build("a1")
+	for !strings.Contains(view.Output, "DONE_a1") {
+		view = f.read(view, 0, 2000)
+	}
+	rows = append(rows, f.stats.take("16 KiB build + marker, plain reads"))
+	view = f.read(view, 0, 0) // drain the prompt
+	f.stats.take("")
+	build("b2")
+	args := map[string]any{"terminal_id": view.TerminalID, "cursor": view.Cursor, "generation": view.Generation, "wait_ms": 2000, "until": "DONE_b2", "limit": 2048}
+	marked := f.terminalCall("scomp_read_terminal", args)
+	if !marked.Found || !strings.HasSuffix(marked.Output, "DONE_b2") {
+		t.Fatalf("until read = %+v", marked)
+	}
+	marked.TerminalID = view.TerminalID
+	view = marked
+	rows = append(rows, f.stats.take("16 KiB build + marker, until (2 KiB)"))
+	view = f.read(view, 0, 0)
+	f.stats.take("")
+
 	// Accumulate 100 KiB of history, then drop the WebSocket. The fake relay
 	// replays retained scrollback on reattach, as Screen did during dogfood.
 	history := historyBlock(100 << 10)
@@ -393,7 +425,7 @@ func runWireCost(t *testing.T) []wireRow {
 	conn = f.nextConn()
 	conn.send(t, []byte("\r\nTAIL_MARKER\r\n"))
 	time.Sleep(200 * time.Millisecond)
-	args := map[string]any{"terminal_id": view.TerminalID, "cursor": view.Cursor, "generation": view.Generation, "resync": "tail"}
+	args = map[string]any{"terminal_id": view.TerminalID, "cursor": view.Cursor, "generation": view.Generation, "resync": "tail"}
 	tailView := f.terminalCall("scomp_read_terminal", args)
 	if !tailView.Resynced || !strings.Contains(tailView.Output, "TAIL_MARKER") || tailView.Skipped == 0 {
 		t.Fatalf("tail resync = %+v", tailView)

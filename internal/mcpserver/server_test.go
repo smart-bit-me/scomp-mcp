@@ -143,3 +143,15 @@ func TestReadWaitSchemaMatchesMaximum(t *testing.T) {
 	}
 	t.Fatal("scomp_read_terminal not advertised")
 }
+
+func TestUntilRejectsTailCombination(t *testing.T) {
+	f := newWireFixture(t, Options{})
+	view := f.terminalCall("scomp_open_terminal", map[string]any{"host_uid": fakeHostUID, "session_id": "work"})
+	f.nextConn()
+	result, err := f.session.CallTool(f.ctx, &mcp.CallToolParams{Name: "scomp_read_terminal", Arguments: map[string]any{
+		"terminal_id": view.TerminalID, "until": "DONE", "resync": "tail",
+	}})
+	if err != nil || !result.IsError {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}

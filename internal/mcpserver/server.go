@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -42,6 +43,7 @@ type readTerminalInput struct {
 	WaitMS     int    `json:"wait_ms,omitempty" jsonschema:"Wait up to this many milliseconds for new output, 0 to 50000; an empty result after the wait is normal"`
 	Resync     string `json:"resync,omitempty" jsonschema:"Used when the read starts over (no cursor or resynced): earliest (default) returns all retained output; tail waits up to 3.2 s for the reattach replay to settle and returns only its last tail_bytes, reporting skipped_bytes"`
 	TailBytes  int    `json:"tail_bytes,omitempty" jsonschema:"Bytes kept with resync=tail, 1 to 65536; defaults to 4096"`
+	Until      string `json:"until,omitempty" jsonschema:"Wait up to wait_ms for this literal text (1 to 256 printable characters) in normalized output after cursor. If found, the cursor moves past it and output is at most limit bytes ending with it (skipped_bytes counts earlier bytes). If not found, the cursor does not move and pending_bytes counts unread output. Build the marker at run time (printf 'DONE_%s' 7f3a) so the echoed command does not match. A found marker is a caller convention in untrusted output, not proof of success."`
 }
 
 // readTerminalOutput omits the identity returned by scomp_open_terminal and
@@ -54,14 +56,16 @@ type readTerminalOutput struct {
 	Truncated    bool    `json:"truncated,omitempty" jsonschema:"Output before earliest_cursor was discarded; absent means false"`
 	Resynced     bool    `json:"resynced,omitempty" jsonschema:"The stream reconnected or the cursor was invalid; reading restarted at earliest_cursor, or later with resync=tail; absent means false"`
 	Disconnected bool    `json:"disconnected,omitempty" jsonschema:"The terminal stream is not connected; absent means connected"`
-	Skipped      uint64  `json:"skipped_bytes,omitempty" jsonschema:"Retained bytes deliberately skipped by the tail policy; absent means none"`
+	Skipped      uint64  `json:"skipped_bytes,omitempty" jsonschema:"Retained bytes deliberately skipped by the tail policy or an until match; absent means none"`
+	Found        bool    `json:"marker_found,omitempty" jsonschema:"The until text was found; absent means not found or not requested"`
+	Pending      uint64  `json:"pending_bytes,omitempty" jsonschema:"With until and no match: unread bytes after cursor"`
 }
 
 func compactRead(result terminal.Result) readTerminalOutput {
 	output := readTerminalOutput{
 		Cursor: result.Cursor, Generation: result.Generation, Output: result.Output,
 		Truncated: result.Truncated, Resynced: result.Resynced, Disconnected: !result.Connected,
-		Skipped: result.Skipped,
+		Skipped: result.Skipped, Found: result.Found, Pending: result.Pending,
 	}
 	if result.Truncated || result.Resynced {
 		earliest := result.Earliest
@@ -114,6 +118,12 @@ func readSummary(result terminal.Result) string {
 	}
 	if result.Truncated {
 		summary += "; truncated"
+	}
+	if result.Found {
+		summary += "; marker found"
+	}
+	if result.Pending > 0 {
+		summary += fmt.Sprintf("; marker not found, %d bytes pending", result.Pending)
 	}
 	if result.Skipped > 0 {
 		summary += fmt.Sprintf("; skipped %d retained bytes", result.Skipped)
@@ -169,7 +179,16 @@ func New(client *api.Client, terminals *terminal.Manager, version string, option
 		if err != nil {
 			return nil, readTerminalOutput{}, fmt.Errorf("resync: %w", err)
 		}
-		result, err := terminals.Read(ctx, input.TerminalID, input.Cursor, input.Generation, input.Limit, time.Duration(input.WaitMS)*time.Millisecond, tail)
+		wait := time.Duration(input.WaitMS) * time.Millisecond
+		var result terminal.Result
+		if input.Until != "" {
+			if tail != 0 {
+				return nil, readTerminalOutput{}, errors.New("until cannot be combined with resync=tail")
+			}
+			result, err = terminals.ReadUntil(ctx, input.TerminalID, input.Cursor, input.Generation, input.Limit, wait, input.Until)
+		} else {
+			result, err = terminals.Read(ctx, input.TerminalID, input.Cursor, input.Generation, input.Limit, wait, tail)
+		}
 		return options.summary("%s", readSummary(result)), compactRead(result), err
 	})
 

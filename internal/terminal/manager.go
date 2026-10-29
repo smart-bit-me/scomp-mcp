@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -27,6 +28,7 @@ const (
 	initialWait      = 3200 * time.Millisecond
 	defaultTailBytes = 4 << 10
 	settleQuiet      = 250 * time.Millisecond
+	maxMarkerBytes   = 256
 )
 
 type Result struct {
@@ -42,6 +44,8 @@ type Result struct {
 	Connected  bool   `json:"connected"`
 	Resynced   bool   `json:"resynced"`
 	Skipped    uint64 `json:"skipped_bytes,omitempty"`
+	Found      bool   `json:"marker_found,omitempty"`
+	Pending    uint64 `json:"pending_bytes,omitempty"`
 }
 
 // TailBytes validates a resync policy: "earliest" (or empty) returns all
@@ -171,6 +175,15 @@ func (m *Manager) Read(ctx context.Context, terminalID string, cursor, generatio
 		return Result{}, err
 	}
 	return h.read(ctx, cursor, generation, limit, wait, tail)
+}
+
+// ReadUntil waits for a literal marker in normalized output after cursor.
+func (m *Manager) ReadUntil(ctx context.Context, terminalID string, cursor, generation uint64, limit int, wait time.Duration, marker string) (Result, error) {
+	h, err := m.get(terminalID)
+	if err != nil {
+		return Result{}, err
+	}
+	return h.readUntil(ctx, cursor, generation, limit, wait, marker)
 }
 
 func (m *Manager) Send(terminalID, text, key string, submit bool) error {
@@ -431,6 +444,95 @@ func (h *handle) read(ctx context.Context, cursor, generation uint64, limit int,
 			return result, nil
 		}
 	}
+}
+
+// readUntil waits for the first occurrence of marker after cursor. When found,
+// the cursor advances past it and output is at most limit bytes ending with
+// the marker; skipped reports the earlier bytes not returned. Otherwise the
+// cursor stays put (reset to the earliest cursor after a resync), output is
+// empty, and pending reports the bytes available to an ordinary read.
+// A marker in untrusted PTY output proves nothing about which program wrote
+// it or whether a command succeeded.
+func (h *handle) readUntil(ctx context.Context, cursor, generation uint64, limit int, wait time.Duration, marker string) (Result, error) {
+	if limit == 0 {
+		limit = defaultReadBytes
+	}
+	if limit < 1 || limit > maxReadBytes {
+		return Result{}, fmt.Errorf("limit must be between 1 and %d", maxReadBytes)
+	}
+	if wait < 0 || wait > MaxWait {
+		return Result{}, fmt.Errorf("wait must be between 0 and %s", MaxWait)
+	}
+	if !validMarker(marker) {
+		return Result{}, fmt.Errorf("until must be 1 to %d bytes of printable UTF-8 without control characters", maxMarkerBytes)
+	}
+	needle := []byte(marker)
+	deadline := time.NewTimer(wait)
+	defer deadline.Stop()
+	var searched uint64 // absolute position already searched for a match start
+	for {
+		h.mu.Lock()
+		end := h.base + uint64(len(h.data))
+		resynced := generation != 0 && generation != h.generation
+		truncated := cursor < h.base && cursor != 0
+		start := cursor
+		if start == 0 || start < h.base || start > end {
+			start = h.base
+			if cursor > end {
+				resynced = true
+			}
+		}
+		from := max(start, searched, h.base)
+		result := Result{
+			TerminalID: h.id, HostUID: h.hostUID, SessionID: h.sessionID, Mode: h.mode,
+			Generation: h.generation, Cursor: start, Earliest: h.base,
+			Truncated: truncated, Connected: h.connected, Resynced: resynced,
+		}
+		if index := bytes.Index(h.data[from-h.base:], needle); index >= 0 && !resynced {
+			markerEnd := from + uint64(index+len(needle))
+			outStart := start
+			if markerEnd-outStart > uint64(limit) {
+				outStart = markerEnd - uint64(limit)
+				for outStart < markerEnd && h.data[outStart-h.base]&0xc0 == 0x80 {
+					outStart++ // do not split a UTF-8 sequence
+				}
+			}
+			result.Output = string(h.data[outStart-h.base : markerEnd-h.base])
+			result.Cursor, result.Skipped, result.Found = markerEnd, outStart-start, true
+			h.mu.Unlock()
+			return result, nil
+		}
+		if end+1 > uint64(len(needle)) {
+			searched = max(searched, end+1-uint64(len(needle)))
+		}
+		result.Pending = end - start
+		notify := h.notify
+		h.mu.Unlock()
+		if wait == 0 || resynced || !result.Connected {
+			return result, nil
+		}
+		select {
+		case <-ctx.Done():
+			return Result{}, ctx.Err()
+		case <-h.ctx.Done():
+			return result, nil
+		case <-notify:
+		case <-deadline.C:
+			return result, nil
+		}
+	}
+}
+
+func validMarker(marker string) bool {
+	if marker == "" || len(marker) > maxMarkerBytes || !utf8.ValidString(marker) {
+		return false
+	}
+	for _, r := range marker {
+		if r < 0x20 || r == 0x7f || r == utf8.RuneError {
+			return false
+		}
+	}
+	return true
 }
 
 // settle waits until some output has arrived and the stream has then been
