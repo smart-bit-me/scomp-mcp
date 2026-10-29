@@ -29,6 +29,15 @@ const (
 	defaultTailBytes = 4 << 10
 	settleQuiet      = 250 * time.Millisecond
 	maxMarkerBytes   = 256
+	maxFrameBytes    = 2 << 20
+)
+
+// Reconnect timing. The agent reconnects to the relay after a fixed 5 s, so
+// the window must comfortably exceed that.
+var (
+	reconnectInitial = 500 * time.Millisecond
+	reconnectMax     = 8 * time.Second
+	reconnectWindow  = 60 * time.Second
 )
 
 type Result struct {
@@ -46,6 +55,7 @@ type Result struct {
 	Skipped    uint64 `json:"skipped_bytes,omitempty"`
 	Found      bool   `json:"marker_found,omitempty"`
 	Pending    uint64 `json:"pending_bytes,omitempty"`
+	Reason     string `json:"disconnect_reason,omitempty"`
 }
 
 // TailBytes validates a resync policy: "earliest" (or empty) returns all
@@ -92,6 +102,8 @@ type handle struct {
 	conn       *websocket.Conn
 	writeMu    sync.Mutex
 	connected  bool
+	retrying   bool
+	reason     string
 	generation uint64
 	base       uint64
 	data       []byte
@@ -301,18 +313,63 @@ func (h *handle) dial(ctx context.Context) (*websocket.Conn, error) {
 		response.Body.Close()
 	}
 	if err != nil {
+		if response != nil {
+			return nil, &handshakeError{status: response.StatusCode}
+		}
 		return nil, fmt.Errorf("open terminal WebSocket: %w", err)
 	}
-	connection.SetReadLimit(1 << 20)
+	connection.SetReadLimit(maxFrameBytes)
 	return connection, nil
+}
+
+type handshakeError struct{ status int }
+
+func (e *handshakeError) Error() string {
+	return fmt.Sprintf("open terminal WebSocket: HTTP %d", e.status)
+}
+
+// describeDisconnect returns a bounded, printable reason and whether the
+// failure is permanent (host removed or credential rejected).
+func describeDisconnect(err error) (string, bool) {
+	var closeErr *websocket.CloseError
+	var handshake *handshakeError
+	var apiErr *api.APIError
+	switch {
+	case errors.As(err, &closeErr):
+		reason := fmt.Sprintf("relay closed the stream: %d", closeErr.Code)
+		if text := printable(closeErr.Text, 123); text != "" {
+			reason += " " + text
+		}
+		return reason, closeErr.Code == websocket.ClosePolicyViolation
+	case errors.As(err, &handshake):
+		return handshake.Error(), handshake.status == http.StatusUnauthorized
+	case errors.As(err, &apiErr):
+		return apiErr.Error(), apiErr.Status == http.StatusUnauthorized || apiErr.Status == http.StatusForbidden
+	case err != nil:
+		return printable("connection lost: "+err.Error(), 200), false
+	}
+	return "connection lost", false
+}
+
+func printable(text string, limit int) string {
+	var out strings.Builder
+	for _, r := range text {
+		if r < 0x20 || r == 0x7f || r == utf8.RuneError || out.Len()+utf8.RuneLen(r) > limit {
+			continue
+		}
+		out.WriteRune(r)
+	}
+	return out.String()
 }
 
 func (h *handle) run(connection *websocket.Conn) {
 	current := connection
 	for {
+		var readErr error
 		for {
 			messageType, data, err := current.ReadMessage()
 			if err != nil {
+				readErr = err
 				break
 			}
 			if messageType == websocket.BinaryMessage {
@@ -320,34 +377,29 @@ func (h *handle) run(connection *websocket.Conn) {
 			}
 		}
 		current.Close()
+		reason, permanent := describeDisconnect(readErr)
 		h.mu.Lock()
 		if h.conn == current {
 			h.conn = nil
 			h.connected = false
+			h.retrying = !permanent && h.ctx.Err() == nil
+			h.reason = reason
 			h.signalLocked()
 		}
 		h.mu.Unlock()
-
-		var next *websocket.Conn
-		for _, delay := range []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second} {
-			select {
-			case <-h.ctx.Done():
-				return
-			case <-time.After(delay):
-			}
-			connectCtx, cancel := context.WithTimeout(h.ctx, 20*time.Second)
-			next, _ = h.dial(connectCtx)
-			cancel()
-			if next != nil {
-				break
-			}
+		if permanent {
+			return
 		}
+
+		next := h.reconnect()
 		if next == nil {
 			return
 		}
 		h.mu.Lock()
 		h.conn = next
 		h.connected = true
+		h.retrying = false
+		h.reason = ""
 		h.generation++
 		h.base += uint64(len(h.data))
 		h.data = h.data[:0]
@@ -355,6 +407,39 @@ func (h *handle) run(connection *websocket.Conn) {
 		h.signalLocked()
 		h.mu.Unlock()
 		current = next
+	}
+}
+
+// reconnect retries with capped exponential backoff for reconnectWindow.
+func (h *handle) reconnect() *websocket.Conn {
+	deadline := time.Now().Add(reconnectWindow)
+	delay := reconnectInitial
+	for {
+		select {
+		case <-h.ctx.Done():
+			return nil
+		case <-time.After(delay):
+		}
+		connectCtx, cancel := context.WithTimeout(h.ctx, 20*time.Second)
+		next, err := h.dial(connectCtx)
+		cancel()
+		if next != nil {
+			return next
+		}
+		reason, permanent := describeDisconnect(err)
+		giveUp := permanent || !time.Now().Before(deadline)
+		h.mu.Lock()
+		h.reason = "reconnect failed: " + reason
+		if giveUp {
+			h.retrying = false
+			h.reason += "; stopped retrying"
+		}
+		h.signalLocked()
+		h.mu.Unlock()
+		if giveUp || h.ctx.Err() != nil {
+			return nil
+		}
+		delay = min(delay*2, reconnectMax)
 	}
 }
 
@@ -428,10 +513,12 @@ func (h *handle) read(ctx context.Context, cursor, generation uint64, limit int,
 			TerminalID: h.id, HostUID: h.hostUID, SessionID: h.sessionID, Mode: h.mode,
 			Generation: h.generation, Cursor: start + uint64(available), Earliest: h.base,
 			Output: string(output), Truncated: truncated, Connected: h.connected, Resynced: resynced, Skipped: skipped,
+			Reason: h.disconnectReasonLocked(),
 		}
+		retrying := h.retrying
 		notify := h.notify
 		h.mu.Unlock()
-		if len(output) > 0 || wait == 0 || resynced || !result.Connected {
+		if len(output) > 0 || wait == 0 || resynced || !result.Connected && !retrying {
 			return result, nil
 		}
 		select {
@@ -487,7 +574,9 @@ func (h *handle) readUntil(ctx context.Context, cursor, generation uint64, limit
 			TerminalID: h.id, HostUID: h.hostUID, SessionID: h.sessionID, Mode: h.mode,
 			Generation: h.generation, Cursor: start, Earliest: h.base,
 			Truncated: truncated, Connected: h.connected, Resynced: resynced,
+			Reason: h.disconnectReasonLocked(),
 		}
+		retrying := h.retrying
 		if index := bytes.Index(h.data[from-h.base:], needle); index >= 0 && !resynced {
 			markerEnd := from + uint64(index+len(needle))
 			outStart := start
@@ -508,7 +597,7 @@ func (h *handle) readUntil(ctx context.Context, cursor, generation uint64, limit
 		result.Pending = end - start
 		notify := h.notify
 		h.mu.Unlock()
-		if wait == 0 || resynced || !result.Connected {
+		if wait == 0 || resynced || !result.Connected && !retrying {
 			return result, nil
 		}
 		select {
@@ -533,6 +622,19 @@ func validMarker(marker string) bool {
 		}
 	}
 	return true
+}
+
+func (h *handle) disconnectReasonLocked() string {
+	if h.connected {
+		return ""
+	}
+	if h.reason == "" {
+		return "disconnected"
+	}
+	if h.retrying {
+		return h.reason + "; reconnecting"
+	}
+	return h.reason
 }
 
 // settle waits until some output has arrived and the stream has then been

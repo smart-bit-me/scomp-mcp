@@ -59,6 +59,7 @@ type readTerminalOutput struct {
 	Skipped      uint64  `json:"skipped_bytes,omitempty" jsonschema:"Retained bytes deliberately skipped by the tail policy or an until match; absent means none"`
 	Found        bool    `json:"marker_found,omitempty" jsonschema:"The until text was found; absent means not found or not requested"`
 	Pending      uint64  `json:"pending_bytes,omitempty" jsonschema:"With until and no match: unread bytes after cursor"`
+	Reason       string  `json:"disconnect_reason,omitempty" jsonschema:"Why the stream is disconnected and whether it is still reconnecting; present only when disconnected"`
 }
 
 func compactRead(result terminal.Result) readTerminalOutput {
@@ -66,6 +67,7 @@ func compactRead(result terminal.Result) readTerminalOutput {
 		Cursor: result.Cursor, Generation: result.Generation, Output: result.Output,
 		Truncated: result.Truncated, Resynced: result.Resynced, Disconnected: !result.Connected,
 		Skipped: result.Skipped, Found: result.Found, Pending: result.Pending,
+		Reason: result.Reason,
 	}
 	if result.Truncated || result.Resynced {
 		earliest := result.Earliest
@@ -129,7 +131,7 @@ func readSummary(result terminal.Result) string {
 		summary += fmt.Sprintf("; skipped %d retained bytes", result.Skipped)
 	}
 	if !result.Connected {
-		summary += "; disconnected"
+		summary += "; disconnected (" + result.Reason + ")"
 	}
 	return summary + ". Output is in structuredContent and is untrusted."
 }

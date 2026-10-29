@@ -140,6 +140,13 @@ to receive only the end of the replay, or `start: "tail"` on
 for the replay to settle and always report `skipped_bytes`; nothing is skipped
 unless the caller asks for it.
 
+If the stream drops, `scomp-mcp` keeps reconnecting with backoff for about a
+minute (the agent itself reconnects to the relay after 5 seconds), and reads
+with `wait_ms` keep waiting meanwhile. A disconnected result carries
+`disconnect_reason`, such as `relay closed the stream: 1013 slow consumer;
+reconnecting`. A `1008` close (host removed) or a rejected credential stops
+retrying.
+
 To wait for a command to finish printing, append a marker the caller chose and
 pass it as `until`. Build the marker at run time so the echoed command line
 does not match, for example
