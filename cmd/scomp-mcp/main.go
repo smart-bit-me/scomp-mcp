@@ -94,9 +94,12 @@ func login(args []string) error {
 		if errors.As(err, &apiError) && apiError.Status == 404 {
 			return errors.New("relay does not provide MCP authorization yet; deploy the MCP-enabled scomp-server or select it with --server")
 		}
+		if errors.As(err, &apiError) && apiError.Status == 429 {
+			return errors.New("relay rate limit reached; wait a minute and run login again")
+		}
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "Approve this scomp MCP client in your browser:\n%s\nCode: %s\n", started.VerificationURI, started.UserCode)
+	fmt.Fprintf(os.Stderr, "Open %s in your browser and enter this code:\n\n    %s\n\nApprove only if the page asks for this code and you started this login.\n", started.VerificationURI, started.UserCode)
 	if !*noBrowser {
 		if err := openBrowser(started.VerificationURI); err != nil {
 			fmt.Fprintln(os.Stderr, "Could not open a browser; copy the URL above.")
@@ -118,31 +121,44 @@ func login(args []string) error {
 		}
 		issued, err := client.PollDevice(ctx, started.DeviceCode, verifier)
 		if err != nil {
-			var apiError *api.APIError
-			if errors.As(err, &apiError) {
-				switch apiError.Code {
-				case "authorization_pending":
-					continue
-				case "slow_down":
-					interval += 5 * time.Second
-					continue
-				case "access_denied":
-					return errors.New("authorization denied")
-				case "expired_token":
-					return errors.New("authorization request expired")
-				}
+			wait, err := pollOutcome(err)
+			if err != nil {
+				return err
 			}
-			return err
+			interval += wait
+			continue
 		}
 		if err := credentials.Save(*configPath, credentials.Config{
 			ServerURL: client.ServerURL(), AccessToken: issued.AccessToken, Credential: issued.Credential,
 		}); err != nil {
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "Authorized %q until %s.\n", issued.Credential.Label, issued.ExpiresAt.Local().Format(time.RFC3339))
+		fmt.Fprintf(os.Stderr, "Authorized %q for %d hosts with scopes %s until %s.\n", issued.Credential.Label,
+			len(issued.Credential.AllowedHosts), joinScopes(issued.Credential.Scopes), issued.ExpiresAt.Local().Format(time.RFC3339))
 		return nil
 	}
 }
+
+// pollOutcome maps a device-token poll error to extra polling delay, or to a
+// final error.
+func pollOutcome(err error) (time.Duration, error) {
+	var apiError *api.APIError
+	if !errors.As(err, &apiError) {
+		return 0, err
+	}
+	switch {
+	case apiError.Code == "authorization_pending":
+		return 0, nil
+	case apiError.Code == "slow_down", apiError.Status == 429:
+		return 5 * time.Second, nil
+	case apiError.Code == "access_denied":
+		return 0, errors.New("authorization denied")
+	case apiError.Code == "expired_token":
+		return 0, errors.New("authorization request expired")
+	}
+	return 0, err
+}
+
 
 func logout(args []string) error {
 	flags := flag.NewFlagSet("logout", flag.ContinueOnError)

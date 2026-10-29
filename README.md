@@ -68,8 +68,11 @@ scomp-mcp login
 scomp-mcp status
 ```
 
-Login opens a browser approval page. Select at least one paired host and approve
-the requested scopes and lifetime. Normal login requests terminal read/write
+Login opens a browser approval page and prints a code. Type that code on the
+page yourself; never approve a request whose code you did not see in your own
+terminal. Then select at least one paired host, untick any scope you do not
+want to grant, and choose the lifetime. Login prints the scopes actually
+granted. Normal login requests terminal read/write
 access; `scomp-mcp login --read-only` omits write access. Credentials default to
 30 days and the server caps them at 90 days.
 
