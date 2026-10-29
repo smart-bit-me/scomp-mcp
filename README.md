@@ -268,8 +268,6 @@ Hacker News/Reddit story remains a draft in
 [docs/launch-post-draft.md](docs/launch-post-draft.md); neither document records
 final product or protocol decisions.
 
-The GitHub repository is private during the MVP validation period.
-
 ## License
 
 Licensed under the **GNU Affero General Public License v3.0** — see

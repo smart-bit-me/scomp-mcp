@@ -147,7 +147,7 @@ func New(client *api.Client, terminals *terminal.Manager, version string, option
 
 	mcp.AddTool(server, readTool(
 		"scomp_list_hosts",
-		"List remote hosts authorized for this credential, including online state and existing tmux/Screen sessions.",
+		"List remote hosts authorized for this credential, including online state and existing tmux/Screen sessions. A listed session can be opened directly with scomp_open_terminal.",
 	), func(ctx context.Context, _ *mcp.CallToolRequest, _ listHostsInput) (*mcp.CallToolResult, listHostsOutput, error) {
 		hosts, err := client.Hosts(ctx)
 		return options.summary("Authorized hosts: %d. Details are in structuredContent.", len(hosts)), listHostsOutput{Hosts: hosts}, err

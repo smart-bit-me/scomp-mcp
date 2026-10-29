@@ -482,4 +482,20 @@ func formatWireCost(rows []wireRow) string {
 func TestWireCost(t *testing.T) {
 	rows := runWireCost(t)
 	t.Log("\n" + formatWireCost(rows))
+
+	f := newWireFixture(t, Options{})
+	tools, err := f.session.ListTools(f.ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	w := tabwriter.NewWriter(&out, 0, 0, 2, ' ', tabwriter.AlignRight)
+	fmt.Fprintln(w, "tool\tdescription B\tinput schema B\toutput schema B\t")
+	for _, tool := range tools.Tools {
+		input, _ := json.Marshal(tool.InputSchema)
+		output, _ := json.Marshal(tool.OutputSchema)
+		fmt.Fprintf(w, "%s\t%d\t%d\t%d\t\n", tool.Name, len(tool.Description), len(input), len(output))
+	}
+	w.Flush()
+	t.Log("\n" + out.String())
 }

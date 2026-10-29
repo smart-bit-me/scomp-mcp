@@ -276,3 +276,45 @@ host.
   bytes for the target MCP hosts?
 
 No final product or protocol conclusions are made in this document.
+
+## Follow-up: implemented changes and measurements
+
+Measured with `make wire-cost` (fake relay, real MCP server; "model bytes" is
+the `structuredContent` JSON that Codex and Claude Code pass to the model).
+
+| Workflow | Before | After |
+|---|---:|---:|
+| All response bytes on the wire (initial scenarios) | 262,789 | 138,867 |
+| Ten empty long polls, model bytes | 2,410 | 400 |
+| Quiet ten-minute command, polls needed | 30 | 12 |
+| Reconnect after 100 KiB history, model bytes | 102,561 | 4,272 with `resync: "tail"` |
+| Open with 100 KiB replay | 3 calls, 102,743 B | 1 call, 4,430 B with `start: "tail"` |
+| 16 KiB build log ending in a marker | 16,856 B | 2,300 B with `until` and a 2 KiB limit |
+
+Findings status:
+
+1. Done. Codex (`codex-rs/protocol/src/models.rs`) and Claude Code 2.1.312
+   (probe server) give the model `structuredContent` only; text content is now
+   a short summary, and `serve --json-text` restores the JSON copy.
+2. Done: compact read results.
+3. Done: 50 s maximum. The wait is local; Codex defaults to a 300 s tool
+   timeout and Claude Code completed a 65 s probe call.
+4. Done: explicit `earliest` (default) or `tail` resync and `start`, always
+   reporting `skipped_bytes`.
+5. Done: `until` on `scomp_read_terminal`. The marker must be built at run time
+   so the echoed command does not match; a match proves nothing.
+6. Deferred deliberately. Input elision cannot be made reliable against
+   Screen wrapping and repaint without a terminal emulator, and `until` plus
+   `tail` already bound the cost. Short remote scripts remain the advice.
+7. Done for the common case: `scomp_list_hosts` says listed sessions can be
+   opened directly. No new selector tool was added.
+8. Done: DCS, SOS, PM, APC, escape intermediates (`ESC ( B`), and C1 controls
+   are removed; unterminated sequences are bounded.
+9. Measured: tools/list is about 9.8 KB per session; output schemas are about
+   3.7 KB of it and the safety prose under 1 KB, so the safety text stays.
+10. Done: the README no longer calls the repository private. The Codex MCP
+    documentation link was checked and is current.
+
+Related fixes from the same review cycle: reconnect backoff that outlasts the
+agent's 5 s reconnect, `disconnect_reason`, a 2 MiB frame limit, and a login
+flow where the user types the code (the relay no longer puts it in the link).
