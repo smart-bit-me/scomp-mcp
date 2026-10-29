@@ -78,9 +78,14 @@ func newFakeRelay(t *testing.T) *fakeRelay {
 		relay.mu.Lock()
 		replay := append(append([]byte(nil), relay.history...), "user@gpu:~$ "...)
 		relay.mu.Unlock()
-		if conn.write(replay) != nil {
-			ws.Close()
-			return
+		// Replay in frames, as a reattaching agent does.
+		for len(replay) > 0 {
+			frame := replay[:min(len(replay), 16<<10)]
+			replay = replay[len(frame):]
+			if conn.write(frame) != nil {
+				ws.Close()
+				return
+			}
 		}
 		relay.conns <- conn
 		for {
@@ -384,6 +389,35 @@ func runWireCost(t *testing.T) []wireRow {
 	row.note = fmt.Sprintf("%d stale bytes before new output", stale)
 	rows = append(rows, row)
 
+	conn.ws.Close()
+	conn = f.nextConn()
+	conn.send(t, []byte("\r\nTAIL_MARKER\r\n"))
+	time.Sleep(200 * time.Millisecond)
+	args := map[string]any{"terminal_id": view.TerminalID, "cursor": view.Cursor, "generation": view.Generation, "resync": "tail"}
+	tailView := f.terminalCall("scomp_read_terminal", args)
+	if !tailView.Resynced || !strings.Contains(tailView.Output, "TAIL_MARKER") || tailView.Skipped == 0 {
+		t.Fatalf("tail resync = %+v", tailView)
+	}
+	rows = append(rows, f.stats.take("reconnect, resync=tail (4 KiB)"))
+	f.call("scomp_close_terminal", map[string]any{"terminal_id": view.TerminalID})
+	f.stats.take("")
+
+	// Open a session whose agent replays 100 KiB of scrollback, as Screen did.
+	view = f.terminalCall("scomp_open_terminal", map[string]any{"host_uid": fakeHostUID, "session_id": "work"})
+	f.nextConn()
+	for !strings.Contains(view.Output, "user@gpu:~$ ") {
+		view = f.read(view, 65536, 2000)
+	}
+	rows = append(rows, f.stats.take("open with 100 KiB replay"))
+	f.call("scomp_close_terminal", map[string]any{"terminal_id": view.TerminalID})
+	f.stats.take("")
+
+	view = f.terminalCall("scomp_open_terminal", map[string]any{"host_uid": fakeHostUID, "session_id": "work", "start": "tail"})
+	f.nextConn()
+	if !strings.HasSuffix(view.Output, "user@gpu:~$ ") || view.Skipped == 0 {
+		t.Fatalf("tail open = %+v", view)
+	}
+	rows = append(rows, f.stats.take("open with 100 KiB replay, start=tail"))
 	f.call("scomp_close_terminal", map[string]any{"terminal_id": view.TerminalID})
 	return rows
 }

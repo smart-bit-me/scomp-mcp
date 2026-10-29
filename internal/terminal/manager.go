@@ -25,6 +25,8 @@ const (
 	maxInputBytes    = 8 << 10
 	MaxWait          = 50 * time.Second
 	initialWait      = 3200 * time.Millisecond
+	defaultTailBytes = 4 << 10
+	settleQuiet      = 250 * time.Millisecond
 )
 
 type Result struct {
@@ -39,6 +41,28 @@ type Result struct {
 	Truncated  bool   `json:"truncated"`
 	Connected  bool   `json:"connected"`
 	Resynced   bool   `json:"resynced"`
+	Skipped    uint64 `json:"skipped_bytes,omitempty"`
+}
+
+// TailBytes validates a resync policy: "earliest" (or empty) returns all
+// retained output and yields 0; "tail" keeps only the last n bytes.
+func TailBytes(policy string, n int) (int, error) {
+	switch policy {
+	case "", "earliest":
+		if n != 0 {
+			return 0, errors.New("tail_bytes requires the tail policy")
+		}
+		return 0, nil
+	case "tail":
+		if n == 0 {
+			n = defaultTailBytes
+		}
+		if n < 1 || n > maxReadBytes {
+			return 0, fmt.Errorf("tail_bytes must be between 1 and %d", maxReadBytes)
+		}
+		return n, nil
+	}
+	return 0, errors.New("policy must be earliest or tail")
 }
 
 type Manager struct {
@@ -75,7 +99,7 @@ func NewManager(client *api.Client, canWrite bool) *Manager {
 	return &Manager{api: client, canWrite: canWrite, handles: make(map[string]*handle)}
 }
 
-func (m *Manager) Open(ctx context.Context, hostUID, sessionID string, cols, rows uint16) (Result, error) {
+func (m *Manager) Open(ctx context.Context, hostUID, sessionID string, cols, rows uint16, tail int) (Result, error) {
 	if !validHostUID(hostUID) || !safeSessionID(sessionID) {
 		return Result{}, errors.New("invalid host_uid or session_id")
 	}
@@ -133,7 +157,7 @@ func (m *Manager) Open(ctx context.Context, hostUID, sessionID string, cols, row
 	h.mu.Unlock()
 	go h.run(connection)
 
-	result, err := h.read(ctx, 0, 0, defaultReadBytes, initialWait)
+	result, err := h.read(ctx, 0, 0, defaultReadBytes, initialWait, tail)
 	if err != nil {
 		m.Close(id)
 		return Result{}, err
@@ -141,12 +165,12 @@ func (m *Manager) Open(ctx context.Context, hostUID, sessionID string, cols, row
 	return result, nil
 }
 
-func (m *Manager) Read(ctx context.Context, terminalID string, cursor, generation uint64, limit int, wait time.Duration) (Result, error) {
+func (m *Manager) Read(ctx context.Context, terminalID string, cursor, generation uint64, limit int, wait time.Duration, tail int) (Result, error) {
 	h, err := m.get(terminalID)
 	if err != nil {
 		return Result{}, err
 	}
-	return h.read(ctx, cursor, generation, limit, wait)
+	return h.read(ctx, cursor, generation, limit, wait, tail)
 }
 
 func (m *Manager) Send(terminalID, text, key string, submit bool) error {
@@ -335,7 +359,11 @@ func (h *handle) append(data []byte) {
 	h.mu.Unlock()
 }
 
-func (h *handle) read(ctx context.Context, cursor, generation uint64, limit int, wait time.Duration) (Result, error) {
+// read returns output after cursor. With tail > 0, a read that starts over
+// (no cursor, a changed generation, or a cursor past the end) first lets the
+// attach replay settle, then skips all but the last tail bytes and reports
+// how many retained bytes it skipped.
+func (h *handle) read(ctx context.Context, cursor, generation uint64, limit int, wait time.Duration, tail int) (Result, error) {
 	if limit == 0 {
 		limit = defaultReadBytes
 	}
@@ -345,6 +373,16 @@ func (h *handle) read(ctx context.Context, cursor, generation uint64, limit int,
 	if wait < 0 || wait > MaxWait {
 		return Result{}, fmt.Errorf("wait must be between 0 and %s", MaxWait)
 	}
+	if tail > 0 {
+		h.mu.Lock()
+		restart := cursor == 0 || generation != 0 && generation != h.generation || cursor > h.base+uint64(len(h.data))
+		h.mu.Unlock()
+		if !restart {
+			tail = 0
+		} else if err := h.settle(ctx, initialWait); err != nil {
+			return Result{}, err
+		}
+	}
 	deadline := time.NewTimer(wait)
 	defer deadline.Stop()
 	for {
@@ -353,11 +391,19 @@ func (h *handle) read(ctx context.Context, cursor, generation uint64, limit int,
 		resynced := generation != 0 && generation != h.generation
 		truncated := cursor < h.base && cursor != 0
 		start := cursor
+		var skipped uint64
 		if start == 0 || start < h.base || start > end {
 			start = h.base
 			if cursor > end {
 				resynced = true
 			}
+		}
+		if tail > 0 && (cursor == 0 || resynced) && end-h.base > uint64(tail) {
+			start = end - uint64(tail)
+			for start < end && h.data[start-h.base]&0xc0 == 0x80 {
+				start++ // do not split a UTF-8 sequence
+			}
+			skipped = start - h.base
 		}
 		offset := int(start - h.base)
 		available := len(h.data) - offset
@@ -368,7 +414,7 @@ func (h *handle) read(ctx context.Context, cursor, generation uint64, limit int,
 		result := Result{
 			TerminalID: h.id, HostUID: h.hostUID, SessionID: h.sessionID, Mode: h.mode,
 			Generation: h.generation, Cursor: start + uint64(available), Earliest: h.base,
-			Output: string(output), Truncated: truncated, Connected: h.connected, Resynced: resynced,
+			Output: string(output), Truncated: truncated, Connected: h.connected, Resynced: resynced, Skipped: skipped,
 		}
 		notify := h.notify
 		h.mu.Unlock()
@@ -383,6 +429,33 @@ func (h *handle) read(ctx context.Context, cursor, generation uint64, limit int,
 		case <-notify:
 		case <-deadline.C:
 			return result, nil
+		}
+	}
+}
+
+// settle waits until some output has arrived and the stream has then been
+// quiet for settleQuiet, or until limit passes.
+func (h *handle) settle(ctx context.Context, limit time.Duration) error {
+	deadline := time.NewTimer(limit)
+	defer deadline.Stop()
+	for {
+		h.mu.Lock()
+		notify, empty := h.notify, len(h.data) == 0
+		h.mu.Unlock()
+		var quiet <-chan time.Time
+		if !empty {
+			quiet = time.After(settleQuiet)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-h.ctx.Done():
+			return nil
+		case <-deadline.C:
+			return nil
+		case <-quiet:
+			return nil
+		case <-notify:
 		}
 	}
 }

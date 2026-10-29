@@ -131,6 +131,15 @@ output; an empty result after the wait is normal. The wait runs inside the
 local `scomp-mcp` process, not the relay. If an MCP host's per-call tool timeout
 is shorter than 50 seconds, use a smaller `wait_ms`.
 
+When a stream reconnects, the read reports `resynced` and a new `generation`,
+and by default returns all retained output again, starting at the earliest
+retained cursor; on attach the agent replays its scrollback, which can be tens
+of kilobytes. Pass `resync: "tail"` (and optionally `tail_bytes`, default 4096)
+to receive only the end of the replay, or `start: "tail"` on
+`scomp_open_terminal` for the same on attach. Tail reads wait up to 3.2 seconds
+for the replay to settle and always report `skipped_bytes`; nothing is skipped
+unless the caller asks for it.
+
 ## How the process runs
 
 ```text
