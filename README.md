@@ -126,6 +126,11 @@ only the terminal's echoed input; call `scomp_read_terminal` again with the
 returned cursor and generation to receive later output. Delivery never proves
 that a command completed or supplies an exit status.
 
+While a command is quiet, `wait_ms` lets one read wait up to 50 seconds for new
+output; an empty result after the wait is normal. The wait runs inside the
+local `scomp-mcp` process, not the relay. If an MCP host's per-call tool timeout
+is shorter than 50 seconds, use a smaller `wait_ms`.
+
 ## How the process runs
 
 ```text

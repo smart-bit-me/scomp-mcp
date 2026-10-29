@@ -37,7 +37,7 @@ type readTerminalInput struct {
 	Cursor     uint64 `json:"cursor,omitempty" jsonschema:"Read bytes after this cursor; use the cursor from the previous result"`
 	Generation uint64 `json:"generation,omitempty" jsonschema:"Generation from the previous result, used to detect reconnects"`
 	Limit      int    `json:"limit,omitempty" jsonschema:"Maximum normalized output bytes, 1 to 65536; defaults to 16384"`
-	WaitMS     int    `json:"wait_ms,omitempty" jsonschema:"Wait up to this many milliseconds for new output, 0 to 20000"`
+	WaitMS     int    `json:"wait_ms,omitempty" jsonschema:"Wait up to this many milliseconds for new output, 0 to 50000; an empty result after the wait is normal"`
 }
 
 // readTerminalOutput omits the identity returned by scomp_open_terminal and

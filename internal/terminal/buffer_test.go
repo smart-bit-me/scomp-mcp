@@ -64,3 +64,13 @@ func TestApprovedOnlyKeyPolicyMatchesAgent(t *testing.T) {
 		}
 	}
 }
+
+func TestHandleReadRejectsWaitAboveMaximum(t *testing.T) {
+	h := &handle{connected: true, generation: 1, notify: make(chan struct{})}
+	if _, err := h.read(context.Background(), 0, 1, 10, MaxWait+time.Millisecond); err == nil {
+		t.Fatal("wait above maximum accepted")
+	}
+	if MaxWait > 55*time.Second {
+		t.Fatalf("MaxWait %s leaves too little margin under 60-second MCP host tool timeouts", MaxWait)
+	}
+}

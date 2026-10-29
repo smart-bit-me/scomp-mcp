@@ -124,3 +124,22 @@ func TestReadResultOmitsIdentityAndDefaults(t *testing.T) {
 		t.Fatalf("resynced read = %s", structured)
 	}
 }
+
+func TestReadWaitSchemaMatchesMaximum(t *testing.T) {
+	f := newWireFixture(t, Options{})
+	tools, err := f.session.ListTools(f.ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range tools.Tools {
+		if tool.Name != "scomp_read_terminal" {
+			continue
+		}
+		schema, _ := json.Marshal(tool.InputSchema)
+		if want := fmt.Sprintf("0 to %d", terminal.MaxWait.Milliseconds()); !strings.Contains(string(schema), want) {
+			t.Fatalf("wait_ms schema %s does not mention %q", schema, want)
+		}
+		return
+	}
+	t.Fatal("scomp_read_terminal not advertised")
+}

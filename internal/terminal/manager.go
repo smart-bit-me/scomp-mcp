@@ -23,7 +23,7 @@ const (
 	maxReadBytes     = 64 << 10
 	defaultReadBytes = 16 << 10
 	maxInputBytes    = 8 << 10
-	MaxWait          = 20 * time.Second
+	MaxWait          = 50 * time.Second
 	initialWait      = 3200 * time.Millisecond
 )
 
