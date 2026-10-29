@@ -2,6 +2,8 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -14,7 +16,7 @@ func TestServerAdvertisesSixScopedTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := New(client, terminal.NewManager(client, true), "test")
+	server := New(client, terminal.NewManager(client, true), "test", Options{})
 	clientTransport, serverTransport := mcp.NewInMemoryTransports()
 	ctx := context.Background()
 	serverSession, err := server.Connect(ctx, serverTransport, nil)
@@ -50,5 +52,54 @@ func TestServerAdvertisesSixScopedTools(t *testing.T) {
 		if !found {
 			t.Errorf("missing tool %s", name)
 		}
+	}
+}
+
+func resultJSON(t *testing.T, result *mcp.CallToolResult) (string, string) {
+	t.Helper()
+	structured, err := json.Marshal(result.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Content) != 1 {
+		t.Fatalf("content blocks = %d", len(result.Content))
+	}
+	text, ok := result.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("content = %T", result.Content[0])
+	}
+	return string(structured), text.Text
+}
+
+func TestResultTextIsSummaryByDefault(t *testing.T) {
+	f := newWireFixture(t, Options{})
+	result := f.call("scomp_open_terminal", map[string]any{"host_uid": fakeHostUID, "session_id": "work"})
+	structured, text := resultJSON(t, result)
+	if !strings.Contains(structured, `"output":"user@gpu:~$ "`) {
+		t.Fatalf("structured = %s", structured)
+	}
+	if text == structured || strings.Contains(text, "user@gpu") || !strings.Contains(text, "12 output bytes") {
+		t.Fatalf("text = %q", text)
+	}
+}
+
+func TestJSONTextRepeatsStructuredResult(t *testing.T) {
+	f := newWireFixture(t, Options{JSONText: true})
+	structured, text := resultJSON(t, f.call("scomp_list_hosts", map[string]any{}))
+	if text != structured || !strings.Contains(text, fakeHostUID) {
+		t.Fatalf("text = %q structured = %q", text, structured)
+	}
+}
+
+func TestToolErrorsKeepErrorText(t *testing.T) {
+	f := newWireFixture(t, Options{})
+	result, err := f.session.CallTool(f.ctx, &mcp.CallToolParams{
+		Name: "scomp_read_terminal", Arguments: map[string]any{"terminal_id": "missing"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError || len(result.Content) != 1 || !strings.Contains(result.Content[0].(*mcp.TextContent).Text, "terminal handle not found") {
+		t.Fatalf("result = %+v", result)
 	}
 }

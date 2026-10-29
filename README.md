@@ -167,6 +167,11 @@ absolute executable path:
 Restart the client after changing its configuration. Verify the exact file
 location and restart behavior in that client's documentation.
 
+Tool results carry their data in `structuredContent`, which Codex and Claude
+Code pass to the model; the text `content` is only a short summary. For a client
+that shows the model only text content, add `--json-text` to the `serve`
+arguments to repeat the full result JSON as text.
+
 ## Tools
 
 - `scomp_list_hosts`

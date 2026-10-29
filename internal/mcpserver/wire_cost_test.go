@@ -223,7 +223,7 @@ type wireFixture struct {
 	session *mcp.ClientSession
 }
 
-func newWireFixture(t *testing.T) *wireFixture {
+func newWireFixture(t *testing.T, options Options) *wireFixture {
 	ctx := context.Background()
 	relay := newFakeRelay(t)
 	client, err := api.NewClient(relay.server.URL, "test-token")
@@ -232,7 +232,7 @@ func newWireFixture(t *testing.T) *wireFixture {
 	}
 	terminals := terminal.NewManager(client, true)
 	t.Cleanup(terminals.CloseAll)
-	server := New(client, terminals, "test")
+	server := New(client, terminals, "test", options)
 	clientTransport, serverTransport := mcp.NewInMemoryTransports()
 	serverSession, err := server.Connect(ctx, serverTransport, nil)
 	if err != nil {
@@ -315,7 +315,7 @@ func compilerError(size int) []byte {
 }
 
 func runWireCost(t *testing.T) []wireRow {
-	f := newWireFixture(t)
+	f := newWireFixture(t, Options{})
 	if _, err := f.session.ListTools(f.ctx, nil); err != nil {
 		t.Fatal(err)
 	}

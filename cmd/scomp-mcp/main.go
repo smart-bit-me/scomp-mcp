@@ -201,6 +201,7 @@ func serve(args []string) error {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	configPath := flags.String("config", "", "credential file path")
+	jsonText := flags.Bool("json-text", false, "repeat each structured result as JSON text, for MCP clients that ignore structuredContent")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -221,7 +222,7 @@ func serve(args []string) error {
 	canWrite := strings.TrimSpace(os.Getenv(credentials.EnvToken)) != "" || hasScope(config.Credential.Scopes, api.ScopeTerminalWrite)
 	terminals := terminal.NewManager(client, canWrite)
 	defer terminals.CloseAll()
-	server := mcpserver.New(client, terminals, version)
+	server := mcpserver.New(client, terminals, version, mcpserver.Options{JSONText: *jsonText})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return server.Run(ctx, &mcp.StdioTransport{MaxLineLength: 1 << 20})
