@@ -3,7 +3,7 @@ VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 RPM_OUTDIR ?= $(shell pwd)/rpmbuild
 SPEC       := packaging/$(BINARY).spec
 
-.PHONY: build build-all test test-race test-cover vet srpm rpm clean
+.PHONY: build build-all test test-race test-cover wire-cost vet srpm rpm clean
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=$(VERSION)" -o $(BINARY) ./cmd/scomp-mcp
@@ -19,6 +19,9 @@ test:
 
 test-race:
 	go test -race ./...
+
+wire-cost:
+	CGO_ENABLED=0 go test -count=1 -run '^TestWireCost$$' -v ./internal/mcpserver
 
 vet:
 	CGO_ENABLED=0 go vet ./...

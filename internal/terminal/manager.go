@@ -23,7 +23,7 @@ const (
 	maxReadBytes     = 64 << 10
 	defaultReadBytes = 16 << 10
 	maxInputBytes    = 8 << 10
-	maxWait          = 20 * time.Second
+	MaxWait          = 20 * time.Second
 	initialWait      = 3200 * time.Millisecond
 )
 
@@ -342,8 +342,8 @@ func (h *handle) read(ctx context.Context, cursor, generation uint64, limit int,
 	if limit < 1 || limit > maxReadBytes {
 		return Result{}, fmt.Errorf("limit must be between 1 and %d", maxReadBytes)
 	}
-	if wait < 0 || wait > maxWait {
-		return Result{}, fmt.Errorf("wait must be between 0 and %s", maxWait)
+	if wait < 0 || wait > MaxWait {
+		return Result{}, fmt.Errorf("wait must be between 0 and %s", MaxWait)
 	}
 	deadline := time.NewTimer(wait)
 	defer deadline.Stop()
