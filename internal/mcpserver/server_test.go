@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -101,5 +102,25 @@ func TestToolErrorsKeepErrorText(t *testing.T) {
 	}
 	if !result.IsError || len(result.Content) != 1 || !strings.Contains(result.Content[0].(*mcp.TextContent).Text, "terminal handle not found") {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestReadResultOmitsIdentityAndDefaults(t *testing.T) {
+	f := newWireFixture(t, Options{})
+	view := f.terminalCall("scomp_open_terminal", map[string]any{"host_uid": fakeHostUID, "session_id": "work"})
+	f.nextConn()
+	structured, _ := resultJSON(t, f.call("scomp_read_terminal", map[string]any{
+		"terminal_id": view.TerminalID, "cursor": view.Cursor, "generation": view.Generation,
+	}))
+	want := fmt.Sprintf(`{"cursor":%d,"generation":1,"output":""}`, view.Cursor)
+	if structured != want {
+		t.Fatalf("read = %s, want %s", structured, want)
+	}
+
+	structured, _ = resultJSON(t, f.call("scomp_read_terminal", map[string]any{
+		"terminal_id": view.TerminalID, "cursor": view.Cursor, "generation": 7,
+	}))
+	if !strings.Contains(structured, `"resynced":true`) || !strings.Contains(structured, `"earliest_cursor":0`) || strings.Contains(structured, "truncated") {
+		t.Fatalf("resynced read = %s", structured)
 	}
 }
