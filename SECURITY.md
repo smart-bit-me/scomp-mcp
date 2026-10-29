@@ -37,7 +37,8 @@ does not persist terminal output locally.
 - Approve only required hosts, scopes, and lifetime. Use
   `scomp-mcp login --read-only` when input is unnecessary.
 - On typical Linux systems, the token is stored in
-  `~/.config/scomp/mcp.json` with mode `0600`. Do not commit, print, copy into
+  `~/.config/scomp/mcp.json` with mode `0600`; on macOS, in
+  `~/Library/Application Support/scomp/mcp.json`. Do not commit, print, copy into
   MCP configuration, or include it in support reports.
 - `SCOMP_MCP_TOKEN` is intended for ephemeral environments. Environment
   variables may be visible to other local processes.

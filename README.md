@@ -74,8 +74,9 @@ access; `scomp-mcp login --read-only` omits write access. Credentials default to
 30 days and the server caps them at 90 days.
 
 The opaque credential is stored at the OS user config location under
-`scomp/mcp.json` (`~/.config/scomp/mcp.json` on typical Linux systems), written
-atomically with mode `0600`. Do not copy the token into the MCP host
+`scomp/mcp.json` (`~/.config/scomp/mcp.json` on typical Linux systems,
+`~/Library/Application Support/scomp/mcp.json` on macOS), written atomically
+with mode `0600`. Do not copy the token into the MCP host
 configuration.
 
 ### Connect Codex
@@ -94,6 +95,22 @@ TUI, use `/mcp` to confirm that `scomp` is connected. `Auth: Unsupported` in
 `scomp-mcp login`, not Codex OAuth.
 
 This setup follows the [official Codex MCP documentation][codex-mcp].
+
+### Connect Claude Code
+
+Register the executable with an absolute path. `--scope local` limits the
+server to the current project directory, which is the narrower choice when
+only one repository needs the remote host; use `--scope user` to make it
+available everywhere:
+
+```sh
+claude mcp add scomp --scope local -- "$HOME/.local/bin/scomp-mcp" serve
+claude mcp list
+```
+
+`claude mcp list` should show `scomp ... ✔ Connected`. The tools load when a
+Claude Code session starts, so restart the session (or resume it) after adding
+the server; a session that was already running will not see them.
 
 ### Smoke test
 
