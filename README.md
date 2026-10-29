@@ -206,6 +206,12 @@ For the isolated multi-repository relay/agent/web test, see
 [docs/local-e2e.md](docs/local-e2e.md). For a self-hosted loopback relay, pass
 `--server http://localhost:PORT`; non-loopback relay URLs must use HTTPS.
 
+Working notes from the October 2026 private-EC2 dogfood session are in
+[docs/mcp-review-2026-10-29.md](docs/mcp-review-2026-10-29.md). The associated
+Hacker News/Reddit story remains a draft in
+[docs/launch-post-draft.md](docs/launch-post-draft.md); neither document records
+final product or protocol decisions.
+
 The GitHub repository is private during the MVP validation period.
 
 ## License
