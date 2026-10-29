@@ -10,22 +10,31 @@ import (
 // only makes it suitable for bounded model context, not safe to execute.
 type Normalizer struct {
 	state     state
+	length    int // bytes consumed by the current CSI or control string
 	utf8Bytes []byte
 	afterCR   bool
 }
+
+// Unterminated sequences must not hide later output indefinitely.
+const (
+	maxCSIBytes    = 256
+	maxStringBytes = 1 << 20
+)
 
 type state uint8
 
 const (
 	stateText state = iota
 	stateEscape
+	stateEscapeIntermediate
 	stateCSI
-	stateOSC
-	stateOSCEscape
+	stateString // OSC, DCS, SOS, PM, or APC, terminated by BEL or ST
+	stateStringEscape
 )
 
 func (n *Normalizer) Reset() {
 	n.state = stateText
+	n.length = 0
 	n.utf8Bytes = n.utf8Bytes[:0]
 	n.afterCR = false
 }
@@ -34,33 +43,43 @@ func (n *Normalizer) Feed(input []byte) []byte {
 	var output bytes.Buffer
 	for _, value := range input {
 		switch n.state {
-		case stateEscape:
-			switch value {
-			case '[':
+		case stateEscape, stateEscapeIntermediate:
+			n.length = 0
+			switch {
+			case value == '[' && n.state == stateEscape:
 				n.state = stateCSI
-			case ']':
-				n.state = stateOSC
+			case (value == ']' || value == 'P' || value == 'X' || value == '^' || value == '_') && n.state == stateEscape:
+				n.state = stateString
+			case value >= 0x20 && value <= 0x2f:
+				n.state = stateEscapeIntermediate // e.g. ESC ( B charset designation
+			case value == 0x1b:
+				n.state = stateEscape
 			default:
-				n.state = stateText
+				n.state = stateText // final byte, or a control that cancels the sequence
 			}
 			continue
 		case stateCSI:
-			if value >= 0x40 && value <= 0x7e {
+			n.length++
+			switch {
+			case value >= 0x40 && value <= 0x7e:
+				n.state = stateText
+			case value == 0x1b:
+				n.state = stateEscape
+			case n.length > maxCSIBytes:
 				n.state = stateText
 			}
 			continue
-		case stateOSC:
-			if value == 0x07 {
+		case stateString, stateStringEscape:
+			n.length++
+			switch {
+			case value == 0x07 || n.state == stateStringEscape && value == '\\':
 				n.state = stateText
-			} else if value == 0x1b {
-				n.state = stateOSCEscape
-			}
-			continue
-		case stateOSCEscape:
-			if value == '\\' {
+			case value == 0x1b:
+				n.state = stateStringEscape
+			case n.length > maxStringBytes:
 				n.state = stateText
-			} else if value != 0x1b {
-				n.state = stateOSC
+			default:
+				n.state = stateString
 			}
 			continue
 		}
@@ -103,6 +122,8 @@ func (n *Normalizer) Feed(input []byte) []byte {
 			r, size := utf8.DecodeRune(n.utf8Bytes)
 			if r == utf8.RuneError && size == 1 {
 				output.WriteRune(utf8.RuneError)
+			} else if r >= 0x80 && r <= 0x9f {
+				// Drop C1 controls such as U+009B (CSI).
 			} else {
 				output.Write(n.utf8Bytes[:size])
 			}
