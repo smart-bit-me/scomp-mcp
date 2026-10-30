@@ -6,6 +6,17 @@ the sibling `scomp-server`, `scomp-web`, `scomp-agent`, and `scomp-mcp`
 repositories. Keep the server, agent, account API, login, and MCP Inspector in
 separate terminals.
 
+`scripts/e2e/run.sh` automates the whole workflow below, including a large
+output burst, full-history reattach, tail resync, a relay restart during an open
+terminal, and revocation. It isolates its relay, agent identity, tmux server,
+and credentials under `/tmp/scomp-e2e`:
+
+```sh
+SRC=$HOME/code/BOPOHA scripts/e2e/run.sh
+```
+
+The steps below do the same by hand.
+
 The filesystem-auth web UI has no account-login screen, so the workflow uses
 the local account API to pair the host and approve the MCP request.
 
