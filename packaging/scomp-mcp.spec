@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name:           scomp-mcp
-Version:        0.1.0
+Version:        0.2.0
 Release:        1%{?dist}
 Summary:        Scomp Model Context Protocol terminal client
 License:        AGPL-3.0-or-later
@@ -40,5 +40,15 @@ install -Dm755 scomp-mcp %{buildroot}%{_bindir}/scomp-mcp
 %{_bindir}/scomp-mcp
 
 %changelog
+* Fri Oct 30 2026 smart-bit.me <admin@scomp.me> - 0.2.0-1
+- Return short text summaries beside structured results; add serve --json-text
+  for clients that read only text content.
+- Compact scomp_read_terminal results; raise the long-poll maximum to 50 s.
+- Add explicit tail resync (resync/start, tail_bytes) that always reports
+  skipped_bytes, and a bounded literal-marker wait (until).
+- Reconnect with backoff for 60 s, report disconnect_reason, and accept 2 MiB
+  frames.
+- Ask the user to type the login code; treat HTTP 429 as slow_down.
+- Strip DCS/SOS/PM/APC strings, charset escapes, and C1 controls from output.
 * Thu Oct 15 2026 smart-bit.me <admin@scomp.me> - 0.1.0-1
 - Initial package for the browser-approved, scoped MCP terminal client.
