@@ -159,7 +159,6 @@ func pollOutcome(err error) (time.Duration, error) {
 	return 0, err
 }
 
-
 func logout(args []string) error {
 	flags := flag.NewFlagSet("logout", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
